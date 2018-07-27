@@ -15,8 +15,9 @@ files <- glue::glue(
 writeLines(files, "merge-bed-files.txt")
 
 # Related individuals to be removed
-rel <- data.table::fread("ukb25589_rel_s488363.dat", data.table = FALSE)
-  
+system("./ukbgene rel")
+rel <- data.table::fread("ukb25589_rel_s488346.dat", data.table = FALSE)
+
 bigsnpr:::write.table2(subset(rel, Kinship > 0.08, c(1, 1)), "rm-rel-indiv.txt")
 
 library(bigsnpr)
