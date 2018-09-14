@@ -3,3 +3,8 @@
 .RData
 .Ruserdata
 *ukb*
+plink
+*.txt
+UKB-merged*
+tmp*
+*.rds
