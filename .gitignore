@@ -9,3 +9,5 @@ UKB-merged*
 tmp*
 *.rds
 *key*
+gwas_*
+breast-cancer/*
