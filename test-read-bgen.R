@@ -1,16 +1,19 @@
-sumstats_joined <- readRDS("breast-cancer/sumstats_joined.rds")[c("chr", "V1")]
+sumstats_joined <- readRDS("sumstats_all_chr.rds")
+
+IDs <- with(sumstats_joined, paste(chr, position_b37, a0, a1, sep = ":"))
 
 library(bigsnpr)
 system.time(
   test <- snp_readBGEN(
-    bgenfiles = glue::glue("ukb_imp_chr{chr}_v3.bgen", chr = 1:3),
-    backingfile = "test_bgen13",
-    list_snp_id = split(sumstats_joined$V1, sumstats_joined$chr),
-    ind_row = 1:5000,
+    bgenfiles = glue::glue("ukb_imp_chr{chr}_v3.bgen", chr = 20:22),
+    backingfile = "test_bgen16",
+    list_snp_id = split(IDs, sumstats_joined$chr),
+    ind_row = 1:50000,
+    bgi_dir = "ukb_imp_bgi/",
     ncores = 3
   )
 ) # 1.8h // 46 min // 10 min ?????
-# tmp <- readRDS("/tmp/RtmpAsN7Oy/file665f42353338.rds")
+# tmp <- readRDS("ukb_imp_bgi//ukb_imp_chr20_v3_not_found.rds")
 
 snp <- snp_attach(test)
 G <- snp$genotypes
