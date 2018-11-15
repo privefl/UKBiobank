@@ -8,6 +8,7 @@ plink
 UKB-merged*
 tmp*
 *.rds
+*.bk
 *key*
 gwas_*
 breast-cancer/*

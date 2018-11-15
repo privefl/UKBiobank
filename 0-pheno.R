@@ -12,8 +12,8 @@ code_cancer <- readr::read_tsv("coding3.tsv")
 df0 <- bigreadr::fread2(
   "ukb22544.csv",
   select = c("eid", "50-0.0", "34-0.0", "52-0.0", "22001-0.0", "21000-0.0",
-             "2453-0.0", "20001-0.0", "21022-0.0", "189-0.0"),
-  col.names = c("eid", "height", "year", "month", "sex", "pop",
+             "22006-0.0", "2453-0.0", "20001-0.0", "21022-0.0", "189-0.0"),
+  col.names = c("eid", "height", "year", "month", "sex", "pop", "is_caucasian",
                 "has_cancer", "cancer_type", "age", "deprivation_index")
 ) %>%
   .[match(ID, .$eid), ] %>%
@@ -21,6 +21,7 @@ df0 <- bigreadr::fread2(
     sex  = factor(sex, levels = c(0, 1),  labels = c("Female", "Male")),
     pop  = factor(pop, levels = code_ancestry$coding,
                   labels = code_ancestry$meaning),
+    is_caucasian = as.logical(is_caucasian),
     has_cancer = as.logical(factor(has_cancer, levels = c(-3, -1, 0, 1),
                                    labels = c(NA, NA, FALSE, TRUE))),
     cancer_type = factor(cancer_type, levels = code_cancer$coding,
