@@ -28,12 +28,14 @@ ind.test <- setdiff(rows_along(G), ind.train)
 
 library(doParallel)
 registerDoParallel(cl <- makeCluster(12, outfile = ""))
-pb <- txtProgressBar(0, nrow(grid), style = 3)
 foreach(ic = rows_along(grid)) %dopar% {
 
   chr      <- grid[ic, "chr"]
   thr.imp  <- grid[ic, "thr.imp"]
   thr.clmp <- grid[ic, "thr.clmp"]
+
+  if (!identical(chr, grid[ic - 1, "chr"]))
+    cat("Starting with chromosome", chr, "\n")
 
   ind.keep <- bigsnpr::snp_clumping(
     G, CHR, S = lpval, thr.r2 = thr.clmp,
@@ -50,10 +52,8 @@ foreach(ic = rows_along(grid)) %dopar% {
 
   scores[, (ic - 1) * n_thr_pval + 1:n_thr_pval] <- prs
 
-  setTxtProgressBar(pb, ic)
   NULL
 }
-close(pb)
 stopCluster(cl)
 
 
