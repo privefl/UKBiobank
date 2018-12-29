@@ -33,7 +33,6 @@ sub <- which(df0$is_caucasian & !is.na(y) & !is.na(ind.indiv))
 length(sub)  # 374,131
 
 
-
 system.time(
   rds <- bigsnpr::snp_readBGEN(
     bgenfiles = glue::glue("data/ukb_imp_chr{chr}_v3.bgen", chr = 1:22),
@@ -114,7 +113,7 @@ ggplot(res, aes(nvar, time / 3600)) +
 ggsave("height-paper2.pdf", width = 887, height = 755, scale = 1/100)
 
 
-# C+T
+#### C+T ####
 COVAR <- cbind(PC, df0$date, df0$sex)
 system.time(
   res2 <- pkg.paper.PRS::PRS(G, CHR, ukb$map$physical.pos, y[sub], COVAR[sub, ],
@@ -122,7 +121,7 @@ system.time(
 ) # 69 min for the GWAS part
 
 cor_by_sex <- lapply(res2$pred, function(pred) {
-  # should have been learned on training set, but let's be optimistic
+  # should have been learned on training set, but let's be optimistic for C+T
   mylm <- lm(y ~ pred + COVAR, data.frame(pred, y = y[sub][ind.test],
                                           COVAR = I(COVAR[sub[ind.test], ])))
   pred2 <- predict(mylm)

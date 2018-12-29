@@ -77,7 +77,8 @@ sum(rowMeans(sapply(mod, function(x) x$beta.X)) > 0) # 397
 pred <- predict(mod, G, ind.test, covar.row = PC[sub[ind.test], ])
 AUC(pred, y[sub][ind.test])  # 58.7
 
-# C+T
+
+#### C+T ####
 res <- pkg.paper.PRS::PRS(G, CHR, ukb$map$physical.pos, y[sub], PC[sub, ],
                           ind.train, ind.test)
 # 15h for the GWAS part

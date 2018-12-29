@@ -14,3 +14,6 @@ gwas_*
 breast-cancer/*
 gavinband*
 data
+BOLT-LMM*
+lassosum/*
+
