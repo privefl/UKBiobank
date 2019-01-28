@@ -14,7 +14,7 @@ system.time({
     )
     with(joined, paste(chr, V3, V4, V5, sep = "_"))
   }
-}) # 80 sec
+}) # < 2 min
 stopCluster(cl)
 
 sum(lengths(list_snp_id))  # 656,060
@@ -27,15 +27,13 @@ stopifnot(nrow(sample) == N)
 
 df0 <- readRDS("pheno.rds")
 ind.indiv <- match(df0$eid, sample$ID_2)
-y <- df0$has_cancer
-y[y] <- NA  ## set to missing all types of cancer
-y[df0$cancer_type == "breast cancer"] <- 1  ## keep only BC
+y <- ifelse(df0$has_breast_cancer, 1, ifelse(df0$has_cancer, NA, 0))
 
 sub <- which(df0$sex == "Female" & df0$is_caucasian & !is.na(y) & !is.na(ind.indiv))
-length(sub)  # 190,039
+length(sub)  # 188,628
 table(y[sub])
 #      0      1
-# 181936   8103
+# 180094   8534
 
 
 system.time(
@@ -55,45 +53,61 @@ ind.train <- sort(sample(length(sub), 150e3))
 ind.test <- setdiff(seq_along(sub), ind.train)
 table(y[sub][ind.train])
 #      0      1
-# 143626   6374
+# 143232   6768
 
 library(bigsnpr)
 ukb <- snp_attach("data/UKB_imp_BC.rds")
 G <- ukb$genotypes
 CHR <- as.numeric(ukb$map$chromosome)
-dim(G) # 190,039 x 656,060
-file.size(G$backingfile) / 1024^3  # 116 GB
+dim(G) # 188,628 x 656,060
+file.size(G$backingfile) / 1024^3  # 115 GB
 
 PC <- as.matrix(readRDS("PC.rds"))
 plot(PC[sample(nrow(PC), 10e3), ], pch = 20)  # verif: all
 plot(PC[sample(sub, 10e3), ], pch = 20)       # verif: caucasian only
 
+# Fit L1-penalized logistic regression
 system.time(
   mod <- big_spLogReg(G, y[sub][ind.train], ind.train,
                       covar.train = PC[sub[ind.train], ],
                       ncores = 10)
-) # 12 min
-sum(rowMeans(sapply(mod, function(x) x$beta.X)) > 0) # 397
+) # 13 min
+summary(mod, best.only = TRUE)$nb_var  # 2653
+summary(mod, best.only = TRUE)$validation_loss  # 0.1819475
 pred <- predict(mod, G, ind.test, covar.row = PC[sub[ind.test], ])
-AUC(pred, y[sub][ind.test])  # 58.7
+AUC(pred, y[sub][ind.test])  # 59.8
+
+# Fit logistic regression with elastic net penalization
+# (using the same sets as before)
+system.time(
+  mod2 <- big_spLogReg(G, y[sub][ind.train], ind.train,
+                       covar.train = PC[sub[ind.train], ],
+                       alphas = c(0.5, 0.1, 0.01, 0.001),
+                       ind.sets = attr(mod, "ind.sets"),
+                       ncores = nb_cores())
+) # 45 min
+plot(mod2)
+summary(mod2)$validation_loss  # 0.1821156 0.1820076 0.1819554 0.1819486
+pred2 <- predict(mod2, G, ind.test, covar.row = PC[sub[ind.test], ])
+AUC(pred2, y[sub][ind.test])  # 59.8
 
 
 #### C+T ####
 res <- pkg.paper.PRS::PRS(G, CHR, ukb$map$physical.pos, y[sub], PC[sub, ],
                           ind.train, ind.test)
 # 15h for the GWAS part
-res$AUC <- sapply(res$pred, function(pred) AUC(pred, y[sub[ind.test]]))
+res$AUC <- sapply(res$pred, AUC, y[sub[ind.test]])
 saveRDS(res, "BC-paper2-gwas.rds")
 res
 # # A tibble: 9 x 6
 #   method        pred           thr.r2 set             timing   AUC
 #   <chr>         <list>          <dbl> <list>           <dbl> <dbl>
-# 1 PRS-all       <dbl [40,039]>   0.05 <int [159,391]> 55444. 0.537
-# 2 PRS-stringent <dbl [40,039]>   0.05 <int [7]>       55444. 0.578
-# 3 PRS-max       <dbl [40,039]>   0.05 <int [24]>      55444. 0.586
-# 4 PRS-all       <dbl [40,039]>   0.2  <int [293,211]> 55444. 0.543
-# 5 PRS-stringent <dbl [40,039]>   0.2  <int [8]>       55444. 0.573
-# 6 PRS-max       <dbl [40,039]>   0.2  <int [31]>      55444. 0.587
-# 7 PRS-all       <dbl [40,039]>   0.8  <int [575,240]> 55444. 0.550
-# 8 PRS-stringent <dbl [40,039]>   0.8  <int [13]>      55444. 0.564
-# 9 PRS-max       <dbl [40,039]>   0.8  <int [114]>     55444. 0.583
+# 1 PRS-all       <dbl [38,628]>   0.05 <int [159,453]> 51236. 0.543
+# 2 PRS-stringent <dbl [38,628]>   0.05 <int [10]>      51236. 0.578
+# 3 PRS-max       <dbl [38,628]>   0.05 <int [21]>      51236. 0.589
+# 4 PRS-all       <dbl [38,628]>   0.2  <int [293,226]> 51236. 0.546
+# 5 PRS-stringent <dbl [38,628]>   0.2  <int [12]>      51236. 0.580
+# 6 PRS-max       <dbl [38,628]>   0.2  <int [30]>      51236. 0.589
+# 7 PRS-all       <dbl [38,628]>   0.8  <int [575,360]> 51236. 0.552
+# 8 PRS-stringent <dbl [38,628]>   0.8  <int [22]>      51236. 0.574
+# 9 PRS-max       <dbl [38,628]>   0.8  <int [3,151]>   51236. 0.582

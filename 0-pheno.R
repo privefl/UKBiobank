@@ -1,7 +1,7 @@
 library(bigreadr)
 library(dplyr, warn.conflicts = FALSE)
 
-## Self-reported ancestry (https://biobank.ctsu.ox.ac.uk/crystal/coding.cgi?id=1001)
+# Self-reported ancestry (https://biobank.ctsu.ox.ac.uk/crystal/coding.cgi?id=1001)
 code_ancestry <- fread2("coding1001.tsv")
 
 csv <- "ukb22544.csv"
@@ -22,7 +22,7 @@ df0 <- fread2(
   )
 rownames(df0) <- df0$eid
 
-## Cancer codes
+# Cancer codes
 df_cancer <- fread2(
   csv,
   select = c(paste0("20001-0.", 0:5), paste0("20001-1.", 0:5), paste0("20001-2.", 0:5))

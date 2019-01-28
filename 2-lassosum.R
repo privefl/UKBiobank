@@ -70,7 +70,6 @@ system.time(
   out <- lassosum.pipeline(cor = cor, chr = CHR, pos = POS, A1 = A2, A2 = A1,
                            test.bfile = "lassosum/val1",
                            cluster = cl,
-                           s = c(0.2, 0.1, 0.05),
                            exclude.ambiguous = FALSE,
                            LDblocks = "EUR.hg19")
 ) # 98 min
