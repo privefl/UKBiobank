@@ -35,7 +35,7 @@ ind.indiv <- match(df0$eid, sample$ID_2)
 rel <- fread2("ukb25589_rel_s488346.dat")
 df0$is_rel2 <- df0$eid %in% rel$ID2
 # + keep caucasian only
-sub <- which(!is.na(ind.indiv) & !df0$is_rel2 & (df0$is_caucasian == 1))
+sub <- which(!is.na(ind.indiv) & !df0$is_rel2 & df0$is_caucasian)
 length(sub)  # 335,609
 
 nPC <- 10
