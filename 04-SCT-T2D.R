@@ -9,6 +9,7 @@ names(sumstats) <- c("chr", "pos", "a1", "a0", "beta", "p")
 nrow(sumstats)  # 12,056,346
 hist(sumstats$beta)
 hist(sumstats$p)
+sumstats <- subset(sumstats, p < 0.1)
 
 info_snp_UKBB <- rbind_df(lapply(1:22, function(chr) {
 
@@ -19,7 +20,7 @@ info_snp_UKBB <- rbind_df(lapply(1:22, function(chr) {
   cbind.data.frame(chr = chr, df)
 
 }))
-info_snp <- bigsnpr::snp_match(subset(sumstats, p < 0.1), info_snp_UKBB)
+info_snp <- bigsnpr::snp_match(sumstats, info_snp_UKBB)
 # 1,408,672 variants in summary statistics.
 # 215,821 ambiguous SNPs have been removed.
 # 1,145,260 variants have been matched; 38 were flipped and 499,125 were reversed.
@@ -90,12 +91,12 @@ system.time(
     bgi_dir = "data/ukb_imp_bgi",
     ncores = NCORES
   )
-) # 3.6H
+) # 4H
 
 library(bigsnpr)
 ukbb <- snp_attach("data/UKBB_T2D.rds")
 G <- ukbb$genotypes
-file.size(G$backingfile) / 1024^3  # 348 GB
+file.size(G$backingfile) / 1024^3  # 410 GB
 CHR <- as.integer(ukbb$map$chromosome)
 POS <- ukbb$map$physical.pos
 
@@ -111,45 +112,47 @@ system.time(
     grid.base.size = c(50, 100, 200, 500),
     ncores = 6  # use less cores because of swapping if not enough memory
   )
-) # 4H
+) # 4.7H
 
 system.time(
   multi_PRS <- snp_grid_PRS(
     G, all_keep, betas = beta, lpS = lpval, ind.row = ind.train,
     n_thr_lpS = 50, backingfile = "data/UKBB_T2D_scores", ncores = NCORES
   )
-) # 2.2H
+) # 2.6H
 
 system.time(
   final_mod <- snp_grid_stacking(
     multi_PRS, y.sub[ind.train], ncores = NCORES, n.abort = 5
   )
-) # 5H
+) # 4.2H
 mod <- final_mod$mod
 plot(mod)
 summary(mod)
 # # A tibble: 3 x 6
 #    alpha validation_loss intercept beta           nb_var message
 #    <dbl>           <dbl>     <dbl> <list>          <int> <list>
-# 1 0.0001           0.173     -2.04 <dbl [65,520]>  23813 <chr [10]>
-# 2 0.01             0.172     -2.01 <dbl [65,520]>   7280 <chr [10]>
-# 3 1                0.172     -1.99 <dbl [65,520]>   5317 <chr [10]>
+# 1 0.0001           0.172     -2.26 <dbl [65,520]>  22263 <chr [10]>
+# 2 0.01             0.172     -2.24 <dbl [65,520]>   6811 <chr [10]>
+# 3 1                0.172     -2.22 <dbl [65,520]>   4643 <chr [10]>
 
 new_beta <- final_mod$beta.G
 
-length(ind <- which(new_beta != 0))  # 477,267
+length(ind <- which(new_beta != 0))  # 535,785
 summary(new_beta)
 #       Min.    1st Qu.     Median       Mean    3rd Qu.       Max.
-# -0.3631526  0.0000000  0.0000000  0.0000209  0.0000000  0.2320248
+# -0.3476860  0.0000000  0.0000000  0.0000191  0.0000000  0.2372232
 summary(new_beta[which(sign(new_beta * beta) < 0)])
 #       Min.    1st Qu.     Median       Mean    3rd Qu.       Max.
-# -4.759e-02 -2.303e-04 -1.078e-05 -8.076e-05  1.185e-04  3.865e-02
+# -3.731e-02 -3.367e-04 -1.870e-05 -9.175e-05  2.246e-04  3.091e-02
 
 pred <- final_mod$intercept +
   big_prodVec(G, new_beta[ind], ind.row = ind.test, ind.col = ind)
 
-AUCBoot(pred, y.sub[ind.test])  # 63.7 [62.8-64.7]
+AUCBoot(pred, y.sub[ind.test])  # 63.8 [62.9-64.8]
 
+# Save
+save(all_keep, multi_PRS, final_mod, file = "data/res_T2D.RData")
 
 library(tidyverse)
 
@@ -168,7 +171,7 @@ s <- nrow(grid2)
 grid2$auc <- big_apply(multi_PRS, a.FUN = function(X, ind, s, y.train) {
   # Sum over all chromosomes, for the same C+T parameters
   single_PRS <- rowSums(X[, ind + s * (0:21)])
-  bigstatsr::AUC(single_PRS, 1 - y.train)
+  bigstatsr::AUC(single_PRS, y.train)
 }, ind = 1:s, s = s, y.train = y.sub[ind.train],
 a.combine = 'c', block.size = 1, ncores = NCORES)
 
@@ -177,8 +180,8 @@ std_prs <- grid2 %>%
   arrange(desc(auc)) %>%
   slice(1) %>%
   print()
-#   size thr.r2 thr.imp num   thr.lp      auc
-# 1  500    0.2     0.3  14 2.263405 0.566519
+#   size thr.r2 thr.imp num   thr.lp       auc
+# 1  500    0.2     0.3  14 5.073505 0.5988753
 
 ind.keep <- unlist(map(all_keep, std_prs$num))
 # Verif on training set
@@ -186,62 +189,40 @@ AUC(
   snp_PRS(G, beta[ind.keep], ind.test = ind.train, ind.keep = ind.keep,
           lpS.keep = lpval[ind.keep], thr.list = std_prs$thr.lp),
   y.sub[ind.train]
-)
+) # 0.5988753
 # Eval on test set
 AUCBoot(
   snp_PRS(G, beta[ind.keep], ind.test = ind.test, ind.keep = ind.keep,
           lpS.keep = lpval[ind.keep], thr.list = std_prs$thr.lp),
   y.sub[ind.test]
-) # 56.9 [56.2-57.6]
-sum(lpval[ind.keep] > std_prs$thr.lp)  # 3288
+) # 59.5 [58.5-60.5]
+sum(lpval[ind.keep] > std_prs$thr.lp)  # 252
 
 max_prs <- grid2 %>% arrange(desc(auc)) %>% slice(1:10) %>% print() %>% slice(1)
 #    size thr.r2 thr.imp num   thr.lp       auc
-# 1  2500    0.2    0.90  72 3.645079 0.5703098
-# 2  2500    0.2    0.30  16 3.645079 0.5702892
-# 3  2500    0.2    0.60  44 3.645079 0.5702892
-# 4  2500    0.2    0.95 100 3.645079 0.5702163
-# 5  5000    0.1    0.95  96 4.176706 0.5698633
-# 6  2500    0.2    0.95 100 3.405206 0.5698004
-# 7  5000    0.1    0.95  96 4.470926 0.5697556
-# 8  2500    0.2    0.90  72 3.405206 0.5697458
-# 9  2500    0.2    0.95 100 3.901849 0.5697330
-# 10 5000    0.1    0.95  96 3.901849 0.5697202
+# 1   625    0.8    0.95 108 1.956627 0.6140597
+# 2   250    0.8    0.95 107 1.956627 0.6138879
+# 3   125    0.8    0.95 106 1.956627 0.6138412
+# 4   625    0.8    0.95 108 1.778804 0.6129340
+# 5   125    0.8    0.95 106 1.778804 0.6128041
+# 6   250    0.8    0.95 107 1.778804 0.6127832
+# 7   625    0.8    0.95 108 2.152227 0.6126656
+# 8   625    0.8    0.95 108 2.604043 0.6125938
+# 9   250    0.8    0.95 107 2.152227 0.6125006
+# 10  250    0.8    0.95 107 2.604043 0.6124968
 
 ind.keep <- unlist(map(all_keep, max_prs$num))
 AUCBoot(
   snp_PRS(G, beta[ind.keep], ind.test = ind.test, ind.keep = ind.keep,
           lpS.keep = lpval[ind.keep], thr.list = max_prs$thr.lp),
   y.sub[ind.test]
-) # 57.3 [56.7-58.0]
-sum(lpval[ind.keep] > max_prs$thr.lp)  # 368
+) # 60.7 [59.8-61.6]
+sum(lpval[ind.keep] > max_prs$thr.lp)  # 33238
 
 ggplot(grid2) +
   geom_point(aes(thr.lp, auc)) +
   facet_grid(thr.imp ~ thr.r2 + size) +
   scale_x_log10(limits = c(2, 10), breaks = c(1, 2, 5), minor_breaks = 1:10) +
-  ylim(0.57, NA) +
-  geom_hline(yintercept = max(1 - aucs), color = "blue", linetype = 2) +
-  geom_hline(yintercept = AUC(pred, y.sub[ind.test]), color = "red", linetype = 2) +
+  ylim(0.58, NA) +
   theme_bigstatsr(size.rel = 0.7) +
   labs(x = "-log10(p-value) threshold (log scale)", y = "AUC")
-
-
-# Redo GWAS quickly to check
-bmi_age <- as.matrix(fread2(csv, select = c("21001-0.0", "21003-0.0")))[sub, ]
-ind.train2 <- ind.train[-which(is.na(bmi_age[ind.train, ]), arr.ind = TRUE)[, "row"]]
-system.time(
-  gwas <- big_univLinReg(G, y.sub[ind.train2], ind.train = ind.train2, ind.col = 1:10000,
-                         covar.train = cbind(COVAR, bmi_age)[ind.train2, ], ncores = NCORES)
-)
-
-qplot(beta[1:10000], gwas$estim) +
-  theme_bigstatsr() +
-  ylim(-2, 2) +
-  geom_abline(slope = -1, intercept = 0, color = "red")
-
-qplot(lpval[1:10000], -predict(gwas), alpha = I(0.2)) +
-  theme_bigstatsr() +
-  ylim(NA, 5) +
-  geom_abline(slope = -1, intercept = 0, color = "red") +
-  labs(x = "-log10(p-values) of initial GWAS", y = "-log10(p-values) of new GWAS")
