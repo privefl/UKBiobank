@@ -2,50 +2,43 @@ download.file("http://practical.icr.ac.uk/blog/wp-content/uploads/uploadedfiles/
               destfile = "sumstats_PRCA.zip")
 unzip("sumstats_PRCA.zip")
 library(bigreadr)
-sumstats <- fread2("meta_v3_onco_euro_overall_ChrAll_1_release.txt",
-                   select = c("Chr", "position", "Allele1", "Allele2", "Freq1",
-                              "Effect", "Pvalue", "OncoArray_imputation_r2"))
+sumstats <- fread2(
+  "meta_v3_onco_euro_overall_ChrAll_1_release.txt",
+  select = c("Chr", "position", "Allele1", "Allele2", "Effect", "Pvalue"),
+  col.names = c("chr", "pos", "a1", "a0", "beta", "p")
+)
 nrow(sumstats)  # 20,370,946
 library(dplyr)
 sumstats <- sumstats %>%
-  filter(pmin(Freq1, 1 - Freq1) > 1e-3) %>%
-  mutate(Freq1 = NULL, Allele1 = toupper(Allele1), Allele2 = toupper(Allele2))
-nrow(sumstats)  # 15,975,602
+  filter(p < 0.1) %>%
+  mutate(a0 = toupper(a0), a1 = toupper(a1))
+nrow(sumstats)  # 2,538,741
 
-sumstats2 <- sumstats
-sumstats2$Allele1 <- sumstats$Allele2
-sumstats2$Allele2 <- sumstats$Allele1
-sumstats2$Effect <- -sumstats$Effect
-sumstats2 <- rbind(sumstats, sumstats2)
+hist(sumstats$beta)
+hist(sumstats$p)
 
-# match variants with UKBB
-library(doParallel)
-NCORES <- 12
-registerDoParallel(cl <- makeCluster(NCORES))
-info_snp <- foreach(chr = 1:22, .packages = "dplyr") %dopar% {
-  paste0("data/ukb_imp_mfi/ukb_mfi_chr", chr, "_v3.txt") %>%
-    bigreadr::fread2(showProgress = FALSE, nThread = 1) %>%
-    dplyr::inner_join(
-      sumstats2[sumstats2$Chr == chr, ], ., na_matches = "never",
-      by = c(position = "V3", Allele1 = "V4", Allele2 = "V5")
-    ) %>%
-    arrange(position) %>%
-    transmute(
-      id    = paste(chr, position, Allele1, Allele2, sep = "_"),
-      beta  = -Effect,
-      lpval = -log10(Pvalue),
-      info  = pmin(OncoArray_imputation_r2, V8)
-    ) %>%
-    na.omit() %>%
-    subset(lpval > 1 & info > 0.3)
-}
-stopCluster(cl)
+info_snp_UKBB <- rbind_df(lapply(1:22, function(chr) {
 
-list_snp_id <-  lapply(info_snp, function(df) df$id)
-beta <-  unlist(lapply(info_snp, function(df) df$beta))
-lpval <- unlist(lapply(info_snp, function(df) df$lpval))
-info <-  unlist(lapply(info_snp, function(df) df$info))
-length(beta)  # 1,496,403
+  file <- paste0("data/ukb_imp_mfi/ukb_mfi_chr", chr, "_v3.txt")
+
+  df <- fread2(file, select = c(3:5, 8), col.names = c("pos", "a0", "a1", "info"))
+
+  cbind.data.frame(chr = chr, df)
+
+}))
+info_snp <- bigsnpr::snp_match(sumstats, info_snp_UKBB)
+# 2,538,741 variants in summary statistics.
+# 355,110 ambiguous SNPs have been removed.
+# 2,075,225 variants have been matched; 76 were flipped and 895,135 were reversed.
+info_snp <- bigsnpr::snp_match(sumstats, info_snp_UKBB, strand_flip = FALSE)
+# 2,414,903 variants have been matched; 0 were flipped and 1,065,289 were reversed.
+info_snp <- subset(na.omit(info_snp), info > 0.3)
+
+list_snp_id <- with(info_snp, split(paste(chr, pos, a0, a1, sep = "_"),
+                                    factor(chr, levels = 1:22)))
+beta <- info_snp$beta
+lpval <- -log10(info_snp$p)
+info <- info_snp$info
 
 # subset samples
 sample <- fread2("ukb25589_imp_chr1_v3_s487327.sample")
@@ -92,6 +85,7 @@ table(y.sub <- y[sub])
 #      0      1
 # 141591   6330
 
+NCORES <- 12
 system.time(
   rds <- bigsnpr::snp_readBGEN(
     bgenfiles = glue::glue("data/ukb_imp_chr{chr}_v3.bgen", chr = 1:22),
