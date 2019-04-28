@@ -23,13 +23,9 @@ sumstats <- subset(sumstats, p < 0.1)
 
 library(bigreadr)
 info_snp_UKBB <- rbind_df(lapply(1:22, function(chr) {
-
   file <- paste0("data/ukb_imp_mfi/ukb_mfi_chr", chr, "_v3.txt")
-
   df <- fread2(file, select = c(3:5, 8), col.names = c("pos", "a0", "a1", "info"))
-
   cbind.data.frame(chr = chr, df)
-
 }))
 info_snp <- bigsnpr::snp_match(sumstats, info_snp_UKBB)
 # 1,241,172 variants in summary statistics.

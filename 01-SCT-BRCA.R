@@ -2,61 +2,36 @@
 #               destfile = "sumstats_BRCA.txt.gz")
 # R.utils::gunzip("sumstats_BRCA.txt.gz")
 library(bigreadr)
-sumstats <- fread2("sumstats_BRCA.txt",
+sumstats <- fread2("sumstats_BRCA.txt", na.strings = "NULL",
                    select = c("chr", "position_b37", "a0", "a1",
                               "bcac_onco_icogs_gwas_beta",
                               "bcac_onco_icogs_gwas_P1df"),
                    col.names = c("chr", "pos", "a0", "a1", "beta", "p"))
 nrow(sumstats)  # 11,792,542
 
-library(tidyverse)
-sumstats <- sumstats %>%
-  filter(p < 0.1, !paste(a0, a1) %in% c("A T", "T A", "C G", "G C"))
-nrow(sumstats)  # 1,523,756
+sumstats <- subset(sumstats, p < 0.1)
+nrow(sumstats)  # 1,768,354
 hist(sumstats$beta)
 hist(sumstats$p)
 
-# augment dataset to match reverse alleles
-ACTG <- setNames(c("A", "C", "T", "G"), c("T", "G", "A", "C"))
-sumstats2 <- sumstats
-sumstats2$a0 <- ACTG[sumstats$a0]
-sumstats2$a1 <- ACTG[sumstats$a1]
-sumstats2 <- rbind(sumstats, na.omit(sumstats2))
-sumstats3 <- sumstats2
-sumstats3$a0 <- sumstats2$a1
-sumstats3$a1 <- sumstats2$a0
-sumstats3$beta <- -sumstats2$beta
-sumstats3 <- rbind(sumstats2, sumstats3)
+info_snp_UKBB <- rbind_df(lapply(1:22, function(chr) {
+  file <- paste0("data/ukb_imp_mfi/ukb_mfi_chr", chr, "_v3.txt")
+  df <- fread2(file, select = c(3:5, 8), col.names = c("pos", "a0", "a1", "info"))
+  cbind.data.frame(chr = chr, df)
+}))
+info_snp <- bigsnpr::snp_match(sumstats, info_snp_UKBB)
+# 1,768,354 variants in summary statistics.
+# 244,598 ambiguous SNPs have been removed.
+# 1,461,181 variants have been matched; 0 were flipped and 327 were reversed.
+info_snp <- bigsnpr::snp_match(sumstats, info_snp_UKBB, strand_flip = FALSE)
+# 1,698,342 variants have been matched; 0 were flipped and 327 were reversed.
+info_snp <- subset(na.omit(info_snp), info > 0.3)
 
-# match variants with UKBB
-library(doParallel)
-NCORES <- 12
-registerDoParallel(cl <- makeCluster(NCORES))
-info_snp <- foreach(chr = 1:22, .packages = "dplyr") %dopar% {
-
-  paste0("data/ukb_imp_mfi/ukb_mfi_chr", chr, "_v3.txt") %>%
-    bigreadr::fread2() %>%
-    inner_join(
-      sumstats3[sumstats3$chr == chr, ], ., na_matches = "never",
-      by = c(pos = "V3", a0 = "V4", a1 = "V5")
-    ) %>%
-    arrange(pos) %>%
-    transmute(
-      id    = paste(chr, pos, a0, a1, sep = "_"),
-      beta  = beta,
-      lpval = -log10(p),
-      info  = V8
-    ) %>%
-    na.omit() %>%
-    filter(info > 0.3)
-}
-stopCluster(cl)
-
-list_snp_id <-  lapply(info_snp, function(df) df$id)
-beta <-  unlist(lapply(info_snp, function(df) df$beta))
-lpval <- unlist(lapply(info_snp, function(df) df$lpval))
-info <-  unlist(lapply(info_snp, function(df) df$info))
-length(beta)  # 1,460,446
+list_snp_id <- with(info_snp, split(paste(chr, pos, a0, a1, sep = "_"),
+                                    factor(chr, levels = 1:22)))
+beta <- info_snp$beta
+lpval <- -log10(info_snp$p)
+info <- info_snp$info
 
 
 # subset samples
@@ -106,6 +81,7 @@ table(y.sub <- y[sub])
 #      0      1
 # 158391  11578
 
+NCORES <- 12
 system.time(
   rds <- bigsnpr::snp_readBGEN(
     bgenfiles = glue::glue("data/ukb_imp_chr{chr}_v3.bgen", chr = 1:22),
@@ -115,18 +91,18 @@ system.time(
     bgi_dir = "data/ukb_imp_bgi",
     ncores = NCORES
   )
-) # 3.8H
+) # 4.8H
 
 
 library(bigsnpr)
 ukbb <- snp_attach("data/UKBB_BRCA.rds")
 G <- ukbb$genotypes
-file.size(G$backingfile) / 1024^3  # 231 GB
+file.size(G$backingfile) / 1024^3  # 269 GB
 CHR <- as.integer(ukbb$map$chromosome)
 POS <- ukbb$map$physical.pos
 
 set.seed(1)
-ind.train <- sort(sample(length(sub), 140e3))
+ind.train <- sort(sample(length(sub), 150e3))
 ind.test <- setdiff(seq_along(sub), ind.train)
 
 system.time(
@@ -135,51 +111,49 @@ system.time(
     grid.thr.imp = c(0.3, 0.6, 0.9, 0.95),
     grid.thr.r2 = c(0.01, 0.05, 0.1, 0.2, 0.5, 0.8, 0.95),
     grid.base.size = c(50, 100, 200, 500),
-    ncores = NCORES
+    ncores = 8
   )
-) # 2.8H
-plot(lengths(all_keep[[1]]), pch = 20)
+) # 4.3H
 
 system.time(
   multi_PRS <- snp_grid_PRS(
     G, all_keep, betas = beta, lpS = lpval, ind.row = ind.train,
     n_thr_lpS = 50, backingfile = "data/UKBB_BRCA_scores", ncores = NCORES
   )
-) # 50 min
+) # 1.5H
 
 system.time(
   final_mod <- snp_grid_stacking(
     multi_PRS, y.sub[ind.train], ncores = NCORES, n.abort = 5
   )
-) # 100 min
+) # 3H
 mod <- final_mod$mod
 plot(mod)
 summary(mod)
 # # A tibble: 3 x 6
-#      alpha validation_loss intercept beta           nb_var message
-#      <dbl>           <dbl>     <dbl> <list>          <int> <list>
-#   1 0.0001           0.239     -2.15 <dbl [80,416]>  25341 <chr [10]>
-#   2 0.01             0.239     -2.07 <dbl [80,416]>   5237 <chr [10]>
-#   3 1                0.239     -2.06 <dbl [80,416]>   3799 <chr [10]>
+#    alpha validation_loss intercept beta           nb_var message
+#    <dbl>           <dbl>     <dbl> <list>          <int> <list>
+# 1 0.0001           0.239     -1.98 <dbl [80,416]>  33073 <chr [10]>
+# 2 0.01             0.239     -1.90 <dbl [80,416]>   6027 <chr [10]>
+# 3 1                0.239     -1.88 <dbl [80,416]>   4631 <chr [10]>
+
+# Save
+save(all_keep, multi_PRS, final_mod, file = "data/res_BRCA.RData")
 
 new_beta <- final_mod$beta.G
 
-length(ind <- which(new_beta != 0))  # 582,878
+length(ind <- which(new_beta != 0))  # 670,050
 summary(new_beta)
 #       Min.    1st Qu.     Median       Mean    3rd Qu.       Max.
-# -1.615e-01  0.000e+00  0.000e+00 -9.490e-06  0.000e+00  2.485e-01
+# -1.688e-01  0.000e+00  0.000e+00 -8.950e-06  0.000e+00  2.388e-01
 summary(new_beta[which(sign(new_beta * beta) < 0)])
 #       Min.    1st Qu.     Median       Mean    3rd Qu.       Max.
-# -2.177e-02 -1.857e-05  2.800e-07  2.849e-05  3.421e-05  2.477e-02
+# -3.075e-02 -1.648e-05  4.400e-07  2.633e-05  3.295e-05  3.568e-02
 
 pred <- final_mod$intercept +
   big_prodVec(G, new_beta[ind], ind.row = ind.test, ind.col = ind)
 
-AUCBoot(pred, y.sub[ind.test])  # 65.9 [64.7-67.1]
-
-
-# Save
-save(all_keep, multi_PRS, final_mod, file = "data/res_BRCA.RData")
+AUCBoot(pred, y.sub[ind.test])  # 65.9 [64.4-67.4]
 
 
 library(tidyverse)
@@ -209,7 +183,7 @@ std_prs <- grid2 %>%
   slice(1) %>%
   print()
 #   size thr.r2 thr.imp num   thr.lp       auc
-# 1  500    0.2     0.3  14 3.248484 0.6214921
+# 1  500    0.2     0.3  14 3.248484 0.6208515
 
 ind.keep <- unlist(map(all_keep, std_prs$num))
 # Verif on training set
@@ -217,35 +191,35 @@ AUC(
   snp_PRS(G, beta[ind.keep], ind.test = ind.train, ind.keep = ind.keep,
           lpS.keep = lpval[ind.keep], thr.list = std_prs$thr.lp),
   y.sub[ind.train]
-)
+) # 0.6208515
 # Eval on test set
 AUCBoot(
   snp_PRS(G, beta[ind.keep], ind.test = ind.test, ind.keep = ind.keep,
           lpS.keep = lpval[ind.keep], thr.list = std_prs$thr.lp),
   y.sub[ind.test]
-) # 62.4 [61.2-63.7]
-sum(lpval[ind.keep] > std_prs$thr.lp)  # 5903
+) # 62.1 [60.5-63.6]
+sum(lpval[ind.keep] > std_prs$thr.lp)  # 6256
 
 max_prs <- grid2 %>% arrange(desc(auc)) %>% slice(1:10) %>% print() %>% slice(1)
 #    size thr.r2 thr.imp num   thr.lp       auc
-# 1  5000    0.1    0.95  96 3.654696 0.6349646
-# 2  2000    0.1    0.95  95 3.654696 0.6348287
-# 3  2500    0.2    0.95 100 3.654696 0.6346257
-# 4  2000    0.1    0.95  95 4.111703 0.6346209
-# 5  5000    0.1    0.95  96 4.111703 0.6346123
-# 6  5000    0.1    0.90  68 4.111703 0.6343516
-# 7  1000    0.2    0.95  99 3.654696 0.6341778
-# 8  2500    0.2    0.90  72 3.248484 0.6340949
-# 9  2000    0.1    0.90  67 4.111703 0.6339956
-# 10 2500    0.2    0.95 100 3.248484 0.6339942
+# 1  2500    0.2    0.95 100 3.654696 0.6351843
+# 2  5000    0.1    0.95  96 3.654696 0.6349136
+# 3  1000    0.2    0.95  99 3.654696 0.6348574
+# 4  2000    0.1    0.95  95 3.654696 0.6348562
+# 5  2500    0.2    0.95 100 3.248484 0.6347538
+# 6  2500    0.2    0.90  72 3.248484 0.6345844
+# 7  2000    0.1    0.95  95 4.111703 0.6345656
+# 8  5000    0.1    0.95  96 4.111703 0.6345364
+# 9  5000    0.1    0.90  68 4.111703 0.6344550
+# 10 2500    0.2    0.90  72 3.654696 0.6342989
 
 ind.keep <- unlist(map(all_keep, max_prs$num))
 AUCBoot(
   snp_PRS(G, beta[ind.keep], ind.test = ind.test, ind.keep = ind.keep,
           lpS.keep = lpval[ind.keep], thr.list = max_prs$thr.lp),
   y.sub[ind.test]
-) # 63.5 [62.3-64.8]
-sum(lpval[ind.keep] > max_prs$thr.lp)  # 1985
+) # 63.3 [61.7-64.8]
+sum(lpval[ind.keep] > max_prs$thr.lp)  # 2572
 
 ggplot(grid2) +
   geom_point(aes(thr.lp, auc)) +
@@ -262,10 +236,14 @@ cbind(beta_GWAS = beta[ind3], pval_GWAS = 10^(-lpval[ind3]),
       af = big_scale()(G, ind.row = ind.train, ind.col = ind3)$center / 2,
       gwas, pval = predict(gwas, log10 = FALSE))
 #   beta_GWAS pval_GWAS           af       estim    std.err niter      score      pval
-# 1   -2.6335  0.004775 3.189286e-04  -0.9875785  0.7397290     5 -1.3350545 0.1818585
-# 2   -2.9353  0.007172 5.000000e-05  -3.8826748  6.4837872     9 -0.5988282 0.5492874
-# 3   -2.2807  0.011160 8.300000e-05  -2.7064779  2.9339564     8 -0.9224670 0.3562850
-# 4   -2.1569  0.004768 8.153571e-05  -0.2359545  1.2740710     4 -0.1851973 0.8530743
-# 5   -2.0555  0.004252 1.500000e-05 -32.1185585 31.5562989     9 -1.0178177 0.3087646
-# 6   -2.5219  0.003705 1.543571e-04  -1.9503401  1.6900563     6 -1.1540089 0.2484965
-# 7   -2.0048  0.004386 6.222143e-04  -0.2669400  0.3894919     5 -0.6853544 0.4931203
+# 1    -2.6335  0.004775 3.185000e-04  -1.0766894  0.7337089     6 -1.4674613 0.1422506
+# 2    -2.9353  0.007172 5.003333e-05  -3.8039739  6.0073820     9 -0.6332166 0.5265922
+# 3    -2.2807  0.011160 8.803333e-05  -2.9472414  3.0811107     8 -0.9565516 0.3387936
+# 4    -2.1291  0.011220 3.220333e-04  -0.1486095  0.4739562     4 -0.3135511 0.7538620
+# 5    -2.1569  0.004768 8.073333e-05  -0.3729499  1.2722939     5 -0.2931319 0.7694213
+# 6    -2.0555  0.004252 1.413333e-05 -34.2383336 32.7139349     9 -1.0465978 0.2952851
+# 7    -2.5219  0.003705 1.543333e-04  -1.9786611  1.6408402     6 -1.2058828 0.2278627
+# 8    -2.0048  0.004386 6.113000e-04  -0.3215922  0.3879102     5 -0.8290377 0.4070831
+# 9    -2.3273  0.004739 5.470000e-05  -5.8596615  7.2622512     8 -0.8068657 0.4197439
+# 10   -2.9494  0.010600 8.666667e-05  -2.9112447  2.9569211     7 -0.9845527 0.3248438
+# 11   -2.5205  0.021100 1.607000e-04  -3.3157859  2.3529122     7 -1.4092264 0.1587682

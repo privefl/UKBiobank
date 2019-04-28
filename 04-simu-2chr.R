@@ -182,7 +182,7 @@ for (ic in 1:10) {
 }
 
 library(tidyverse)
-list.files("res_simu", "1M_.+\\.rds$", full.names = TRUE) %>%
+list.files("res_simu", "2chr_.+\\.rds$", full.names = TRUE) %>%
   map_dfr(readRDS) %>%
   print() %>%
   map_chr(~ {

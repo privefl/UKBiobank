@@ -5,6 +5,7 @@
 *ukb*
 plink
 *.txt
+*.zip
 UKB-merged*
 tmp*
 *.rds
