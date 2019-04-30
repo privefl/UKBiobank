@@ -1,49 +1,39 @@
-download.file("ftp://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/WrayNR_29700475_GCST005839/MDD2018_ex23andMe.gz",
-              destfile = "sumstats_MDD.txt.gz")
-R.utils::gunzip("sumstats_MDD.txt.gz")
+# download.file("ftp://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/WrayNR_29700475_GCST005839/MDD2018_ex23andMe.gz",
+#               destfile = "sumstats_MDD.txt.gz")
+# R.utils::gunzip("sumstats_MDD.txt.gz")
 library(bigreadr)
 sumstats <- fread2("sumstats_MDD.txt", fill = TRUE,
-                   select = c("CHR", "BP", "A1", "A2", "OR", "P"))
+                   select = c("CHR", "BP", "A1", "A2", "OR", "P"),
+                   col.names = c("chr", "pos", "a1", "a0", "or", "p"))
 nrow(sumstats)  # 13,554,550
-hist(log(sumstats$OR))
-hist(sumstats$P)
+library(dplyr)
+sumstats <- sumstats %>%
+  filter(p < 0.1) %>%
+  mutate(beta = log(or), or = NULL, chr = as.integer(chr))
+nrow(sumstats)  # 1,610,995
+hist(sumstats$beta)
+hist(sumstats$p)
 
-# augment dataset to match reverse alleles
-sumstats2 <- sumstats
-sumstats2$A1 <- sumstats$A2
-sumstats2$A2 <- sumstats$A1
-sumstats2$OR <- 1 / sumstats$OR
-sumstats2 <- rbind(sumstats, sumstats2)
 
-# match variants with UKBB
-library(doParallel)
-NCORES <- 12
-registerDoParallel(cl <- makeCluster(NCORES))
-info_snp <- foreach(chr = 1:22, .packages = "dplyr") %dopar% {
+info_snp_UKBB <- rbind_df(lapply(1:22, function(chr) {
+  file <- paste0("data/ukb_imp_mfi/ukb_mfi_chr", chr, "_v3.txt")
+  df <- fread2(file, select = c(3:5, 8), col.names = c("pos", "a0", "a1", "info"))
+  cbind.data.frame(chr = chr, df)
+}))
+info_snp <- bigsnpr::snp_match(sumstats, info_snp_UKBB)
+# 1,610,995 variants in summary statistics.
+# 224,231 ambiguous SNPs have been removed.
+# 1,201,894 variants have been matched; 102 were flipped and 521,969 were reversed.
+info_snp <- bigsnpr::snp_match(sumstats, info_snp_UKBB, strand_flip = FALSE)
+# 1,420,221 variants have been matched; 0 were flipped and 629,580 were reversed.
+info_snp <- subset(na.omit(info_snp), info > 0.3)
 
-  paste0("data/ukb_imp_mfi/ukb_mfi_chr", chr, "_v3.txt") %>%
-    bigreadr::fread2() %>%
-    inner_join(
-      sumstats2[sumstats2$CHR == chr, ], ., na_matches = "never",
-      by = c(BP = "V3", A1 = "V4", A2 = "V5")
-    ) %>%
-    arrange(BP) %>%
-    transmute(
-      id    = paste(CHR, BP, A1, A2, sep = "_"),
-      beta  = -log(OR),
-      lpval = -log10(P),
-      info  = V8
-    ) %>%
-    na.omit() %>%
-    filter(lpval > 1 & info > 0.3)
-}
-stopCluster(cl)
+list_snp_id <- with(info_snp, split(paste(chr, pos, a0, a1, sep = "_"),
+                                    factor(chr, levels = 1:22)))
+beta <- info_snp$beta
+lpval <- -log10(info_snp$p)
+info <- info_snp$info
 
-list_snp_id <-  lapply(info_snp, function(df) df$id)
-beta <-  unlist(lapply(info_snp, function(df) df$beta))
-lpval <- unlist(lapply(info_snp, function(df) df$lpval))
-info <-  unlist(lapply(info_snp, function(df) df$info))
-length(beta)  # 1,411,393
 
 # subset samples
 sample <- fread2("ukb25589_imp_chr1_v3_s487327.sample")
@@ -60,17 +50,14 @@ ind.indiv <- match(df0$eid, sample$ID_2)
 df0$is_rel2 <- df0$eid %in% fread2("ukb25589_rel_s488346.dat")$ID2
 
 
-# Non-cancer illness codes (https://biobank.ctsu.ox.ac.uk/crystal/coding.cgi?id=6)
-# 1286	depression           	                  Yes	1312	1269
-# 1287	anxiety/panic attacks	                  Yes	1313	1269
-# 1288	nervous breakdown                     	Yes	1314	1269
-# 1289	schizophrenia	                          Yes	1315	1269
-# 1290	deliberate self-harm/suicide attempt	  Yes	1316	1269
-# 1291	mania/bipolar disorder/manic depression	Yes	1317	1269
 df_illness <- fread2(csv, select = c(paste0("20002-0.", 0:28),
                                      paste0("20002-1.", 0:28),
                                      paste0("20002-2.", 0:28)))
-df_ICD10 <- fread2(csv, select = c(paste0("41202-0.", 0:379),
+df_ICD10 <- fread2(csv, select = c(paste0("40001-", 0:2, ".0"),
+                                   paste0("40002-0.", 0:13),
+                                   paste0("40002-1.", 0:13),
+                                   paste0("40002-2.", 0:13),
+                                   paste0("41202-0.", 0:379),
                                    paste0("41204-0.", 0:434)))
 ind_MDD <- sort(unique(unlist(c(
   lapply(df_illness, function(x) which(x == 1286)),
@@ -83,11 +70,13 @@ ind_psy <- sort(unique(unlist(c(
 y <- rep(0, nrow(df0)); y[ind_psy] <- NA; y[ind_MDD] <- 1
 
 sub <- which(!is.na(ind.indiv) & !df0$is_rel2 & df0$is_caucasian & !is.na(y))
-length(sub)  # 317,856
+length(sub)  # 317,824
 table(y.sub <- y[sub])
 #      0      1
-# 291735  26121
+# 291690  26134
 
+
+NCORES <- 12
 system.time(
   rds <- bigsnpr::snp_readBGEN(
     bgenfiles = glue::glue("data/ukb_imp_chr{chr}_v3.bgen", chr = 1:22),
@@ -120,13 +109,11 @@ system.time(
     ncores = 6
   )
 ) # 13.4H
-plot(lengths(all_keep[[1]]), pch = 20)
 
 system.time(
   multi_PRS <- snp_grid_PRS(
     G, all_keep, betas = beta, lpS = lpval, ind.row = ind.train,
-    grid.lpS.thr = seq_log(1, 0.999 * max(lpval), 30),
-    backingfile = "data/UKBB_MDD_scores", ncores = NCORES
+    n_thr_lpS = 50, backingfile = "data/UKBB_MDD_scores", ncores = NCORES
   )
 ) # 4.5H
 
@@ -147,6 +134,9 @@ summary(mod)
 #   4 0.1              0.278      3.83 <dbl [58,380]>   3107 <chr [10]>
 #   5 1                0.278      3.82 <dbl [58,380]>   2807 <chr [10]>
 
+# Save
+save(all_keep, multi_PRS, final_mod, file = "data/res_MDD.RData")
+
 new_beta <- final_mod$beta.G
 
 length(ind <- which(new_beta != 0))  # 504,886
@@ -159,11 +149,8 @@ pred <- final_mod$intercept +
 AUCBoot(pred, y.sub[ind.test])  # 60.6 [59.8-61.3]
 
 
-aucs <- apply(multi_PRS, 2, AUC, y.sub[ind.train])
-
 library(tidyverse)
 
-ind2 <- sort(sample(ind, 10e3))
 ggplot(data.frame(y = new_beta, x = beta)[ind, ]) +
   geom_abline(slope = 1, intercept = 0, color = "red") +
   geom_abline(slope = 0, intercept = 0, color = "blue") +
@@ -173,8 +160,14 @@ ggplot(data.frame(y = new_beta, x = beta)[ind, ]) +
 
 grid2 <- attr(all_keep, "grid") %>%
   mutate(thr.lp = list(attr(multi_PRS, "grid.lpS.thr")), num = row_number()) %>%
-  unnest() %>%
-  mutate(auc = aucs)
+  unnest()
+s <- nrow(grid2)
+grid2$auc <- big_apply(multi_PRS, a.FUN = function(X, ind, s, y.train) {
+  # Sum over all chromosomes, for the same C+T parameters
+  single_PRS <- rowSums(X[, ind + s * (0:21)])
+  bigstatsr::AUC(single_PRS, y.train)
+}, ind = 1:s, s = s, y.train = y.sub[ind.train],
+a.combine = 'c', block.size = 1, ncores = NCORES)
 
 std_prs <- grid2 %>%
   filter(thr.imp == 0.3, thr.r2 == 0.2, size == 500, thr.lp <= 8) %>%
@@ -182,7 +175,7 @@ std_prs <- grid2 %>%
   slice(1) %>%
   print()
 #   size thr.r2 thr.imp num   thr.lp       auc
-# 1  500    0.2     0.3  14 1.177012 0.5532257
+# 1  500    0.2     0.3  14 4.580883 0.7489942
 
 ind.keep <- unlist(map(all_keep, std_prs$num))
 # Verif on training set
@@ -190,35 +183,35 @@ AUC(
   snp_PRS(G, beta[ind.keep], ind.test = ind.train, ind.keep = ind.keep,
           lpS.keep = lpval[ind.keep], thr.list = std_prs$thr.lp),
   y.sub[ind.train]
-)
+) # 0.7489942
 # Eval on test set
 AUCBoot(
   snp_PRS(G, beta[ind.keep], ind.test = ind.test, ind.keep = ind.keep,
           lpS.keep = lpval[ind.keep], thr.list = std_prs$thr.lp),
   y.sub[ind.test]
-) # 55.3 [54.5-56.1]
-sum(lpval[ind.keep] > std_prs$thr.lp)  # 202,175
+) # 75.4 [72.4-78.4]
+sum(lpval[ind.keep] > std_prs$thr.lp)  # 1112
 
 max_prs <- grid2 %>% arrange(desc(auc)) %>% slice(1:10) %>% print() %>% slice(1)
-#    size thr.r2 thr.imp num   thr.lp       auc
-# 1  1000    0.5    0.95 104 1.000000 0.6071636
-# 2   400    0.5    0.95 103 1.000000 0.6068476
-# 3   625    0.8    0.95 108 1.000000 0.6065254
-# 4  1000    0.5    0.95 104 1.084902 0.6062425
-# 5   250    0.8    0.95 107 1.000000 0.6060264
-# 6   400    0.5    0.95 103 1.084902 0.6058636
-# 7   200    0.5    0.95 102 1.000000 0.6057485
-# 8   200    0.5    0.95 102 1.084902 0.6047690
-# 9   625    0.8    0.95 108 1.084902 0.6047018
-# 10  125    0.8    0.95 106 1.000000 0.6045263
+#     size thr.r2 thr.imp num   thr.lp       auc
+# 1  10000   0.01     0.9  58 4.580883 0.7730035
+# 2  20000   0.01     0.9  59 4.580883 0.7730035
+# 3  50000   0.01     0.9  60 4.580883 0.7730035
+# 4   5000   0.01     0.9  57 4.580883 0.7722518
+# 5   5000   0.01     0.9  57 5.149850 0.7716009
+# 6  10000   0.01     0.9  58 5.149850 0.7713099
+# 7  20000   0.01     0.9  59 5.149850 0.7713099
+# 8  50000   0.01     0.9  60 5.149850 0.7713099
+# 9   5000   0.01     0.9  57 7.316962 0.7691121
+# 10  5000   0.01     0.9  57 5.789486 0.7686678
 
 ind.keep <- unlist(map(all_keep, max_prs$num))
 AUCBoot(
   snp_PRS(G, beta[ind.keep], ind.test = ind.test, ind.keep = ind.keep,
           lpS.keep = lpval[ind.keep], thr.list = max_prs$thr.lp),
   y.sub[ind.test]
-) # 60.0 [59.2-60.7]
-sum(lpval[ind.keep] > max_prs$thr.lp)  # 155,037
+) # 76.9 [73.9-79.7]
+sum(lpval[ind.keep] > max_prs$thr.lp)  # 267
 
 ggplot(grid2) +
   geom_point(aes(thr.lp, auc)) +
