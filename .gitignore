@@ -5,6 +5,7 @@
 *ukb*
 plink
 *.txt
+*.tsv
 *.zip
 UKB-merged*
 tmp*
@@ -19,4 +20,6 @@ BOLT-LMM*
 lassosum/*
 plink2*
 simus/
+simus1/
+TAGC meta-analyses results for asthma risk/
 
