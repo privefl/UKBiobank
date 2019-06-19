@@ -152,6 +152,7 @@ for (ic in 1:10) {
   #   facet_grid(thr.imp ~ thr.r2 + size) +
   #   scale_x_log10(limits = c(0.1, 3), breaks = c(0.1, 1)) +
   #   ylim(0.65, NA) +
+  #   # ylim(0.55, NA) +
   #   theme_bigstatsr(size.rel = 0.7) +
   #   labs(x = "-log10(p-value) threshold (log scale)", y = "AUC")
 
