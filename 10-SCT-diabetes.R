@@ -89,9 +89,11 @@ sample <- sample[-1, ]
 stopifnot(nrow(sample) == N)
 
 csv <- "ukb22544.csv"
-df0 <- fread2(csv, select = c("eid", "22006-0.0", paste0("2976-", 0:2, ".0")),
-              col.names = c("eid", "is_caucasian", paste0("diag_age", 0:2)))
-diag_age <- df0[3:5] %>%
+df0 <- fread2(csv, select = c("eid", "22006-0.0", "21001-0.0", "31-0.0",
+                              paste0("2976-", 0:2, ".0")),
+              col.names = c("eid", "is_caucasian", "BMI", "sex",
+                            paste0("diag_age", 0:2)))
+diag_age <- df0[5:7] %>%
   mutate_all(~ ifelse(. > 0, ., NA)) %>%
   rowMeans(na.rm = TRUE)
 
@@ -139,7 +141,7 @@ system.time(
     bgi_dir = "data/ukb_imp_bgi",
     ncores = NCORES
   )
-) # 6.6H
+) # 7H
 
 ukbb <- snp_attach("data/UKBB_diabetes.rds")
 G <- ukbb$genotypes
@@ -150,15 +152,12 @@ POS <- ukbb$map$physical.pos
 set.seed(1); ind.train <- sort(sample(length(sub), 8e3))
 ind.test <- setdiff(seq_along(sub), ind.train)
 
-ind1 <- which(!is.na(info_snp$beta_T1D))
-ind2 <- which(!is.na(info_snp$beta_T2D))
-
 system.time(
   all_keep <- snp_grid_clumping(
     G, CHR, POS, lpS = lpval, ind.row = ind.train, infos.imp = info,
     grid.thr.imp = c(0.6, 0.9, 0.95),
     grid.thr.r2 = c(0.01, 0.05, 0.1, 0.2, 0.5, 0.8, 0.95),
-    grid.base.size = c(50, 100, 200, 500),
+    grid.base.size = c(50, 200, 500),
     groups = split(rows_along(info_snp), info_snp$id),
     ncores = NCORES
   )
@@ -173,27 +172,27 @@ system.time(
 
 system.time(
   final_mod <- snp_grid_stacking(
-    multi_PRS, y.sub[ind.train], ncores = NCORES, K = 5
+    multi_PRS, y.sub[ind.train], ncores = NCORES, K = 4
   )
 ) # 4 min
 mod <- final_mod$mod
 plot(mod)
 summary(mod)
-# ## A tibble: 3 x 6
-#    alpha validation_loss intercept beta           nb_var message
+# A tibble: 3 x 6
+# alpha validation_loss intercept beta           nb_var message
 #    <dbl>           <dbl>     <dbl> <list>          <int> <list>
-# 1 0.0001           0.188      3.40 <dbl [80,948]>  27633 <chr [5]>
-# 2 0.01             0.189      3.96 <dbl [80,948]>   3484 <chr [5]>
-# 3 1                0.189      4.03 <dbl [80,948]>   1448 <chr [5]>
+# 1 0.0001           0.189      3.46 <dbl [61,404]>  22919 <chr [4]>
+# 2 0.01             0.190      3.63 <dbl [61,404]>   3763 <chr [4]>
+# 3 1                0.190      3.82 <dbl [61,404]>   1278 <chr [4]>
 
 new_beta <- final_mod$beta.G
 
-length(ind <- which(new_beta != 0))  # 887,308
+length(ind <- which(new_beta != 0))  # 824,130
 
 pred <- final_mod$intercept +
   big_prodVec(G, new_beta[ind], ind.row = ind.test, ind.col = ind)
 
-AUCBoot(pred, y.sub[ind.test])  # 80.2 [76.3-83.8]
+AUCBoot(pred, y.sub[ind.test])  # 80.3 [76.4-83.9]
 
 library(tidyverse)
 
@@ -202,24 +201,17 @@ ggplot(data.frame(pheno = factor(y.sub[ind.test], levels = 0:1, labels = c("T1D"
   theme_bigstatsr() +
   geom_density(aes(pred, fill = pheno), alpha = 0.3) +
   theme(legend.position = c(0.2, 0.7)) +
-  labs(fill = "Phenotype", x = "Probability of type 2")
+  labs(fill = NULL, x = "Probability of type 2 (PRS)") +
+  ggtitle("AUC: 80.3 [76.4-83.9]")
 
 ggplot(data.frame(pheno = factor(y.sub[ind.test], levels = 0:1, labels = c("T1D", "T2D")),
                   pred = 1 / (1 + exp(-pred)),
                   age = diag_age[sub][ind.test])) +
   theme_bigstatsr() +
   geom_point(aes(pred, age, color = pheno), alpha = 0.7) +
-  theme(legend.position = c(0.07, 0.5)) +
-  labs(color = "Type", x = "Probability of type 2", y = "Age at diagnosis")
-
-
-ind2 <- sample(ind, 20e3)
-ggplot(data.frame(y = new_beta, x = beta)[ind2, ]) +
-  geom_abline(slope = 1, intercept = 0, color = "red") +
-  geom_abline(slope = 0, intercept = 0, color = "blue") +
-  geom_point(aes(x, y), size = 0.8) +
-  theme_bigstatsr() +
-  labs(x = "Effect sizes from GWAS", y = "Non-zero effect sizes from SCT")
+  theme(legend.position = c(0.1, 0.55)) +
+  labs(color = NULL, x = "Probability of type 2 (PRS)", y = "Age at diagnosis") +
+  guides(colour = guide_legend(override.aes = list(size = 3, alpha = 1)))
 
 grid2 <- attr(all_keep, "grid") %>%
   mutate(thr.lp = list(attr(multi_PRS, "grid.lpS.thr")), num = row_number()) %>%
@@ -264,12 +256,28 @@ ggplot(grid2) +
   labs(x = "-log10(p-value) threshold (log scale)", y = "AUC", color = "Type")
 
 
+#### TRY CLUSTERING ####
+
+ms <- big_scale()(multi_PRS)
+
+svd <- big_randomSVD(multi_PRS, fun.scaling = big_scale(),
+                     ind.col = which(ms$scale > 0),
+                     ncores = nb_cores())
+apply(svd$u, 2, AUC, y.sub[ind.train])
+plot(svd)
+plot(svd, type = "scores", scores = 1:2) +
+  aes(color = as.factor(y.sub[ind.train] + 1), alpha = I(0.6)) +
+  labs(color = "Type")
+plot(svd, type = "scores", scores = 3:4) +
+  aes(color = as.factor(y.sub[ind.train] + 1), alpha = I(0.6)) +
+  labs(color = "Type")
+
 #### USING AGE AT DIAGNOSIS ####
 
 age.train <- diag_age[sub][ind.train]
 system.time(
   final_mod2 <- snp_grid_stacking(
-    multi_PRS, y.sub[ind.train], ncores = NCORES, K = 5,
+    multi_PRS, y.sub[ind.train], ncores = NCORES, K = 4,
     covar.train = cbind(age.train, log1p(age.train)), pf.covar = c(0, 0)
   )
 ) # 4 min
@@ -301,28 +309,151 @@ AUCBoot(pred2, y.sub[ind.test])  # 79.4 [75.5-83.2] / 79.5 [75.5-83.2]
 
 
 age.test <- diag_age[sub][ind.test]
-pred3 <- pred2 + cbind(age.test, log1p(age.test)) %*% final_mod2$beta.covar
+pred.covar <- cbind(age.test, log1p(age.test)) %*% final_mod2$beta.covar
+pred3 <- pred2 + pred.covar
+
+curve(crossprod(rbind(x, log1p(x)), final_mod2$beta.covar), from = 0.5, to = 80,
+      xlab = "Age of diagnosis", ylab = "Effect of age of diagnosis")
 
 AUCBoot(pred3, y.sub[ind.test])  # 90.5 [87.3-93.3] / 90.9 [87.7-93.7]
+AUCBoot(pred.covar, y.sub[ind.test])
 
 ggplot(data.frame(pheno = factor(y.sub[ind.test], levels = 0:1, labels = c("T1D", "T2D")),
                   pred = 1 / (1 + exp(-pred3)))) +
   theme_bigstatsr() +
   geom_density(aes(pred, fill = pheno), alpha = 0.3) +
   theme(legend.position = c(0.2, 0.7)) +
-  labs(fill = "Phenotype", x = "Probability of type 2")
+  labs(fill = NULL, x = "Probability of type 2 (PRS + diag_age + log1p(diag_age))") +
+  ggtitle("AUC: 91.0 [87.8-93.9]")
 
 ggplot(data.frame(pheno = factor(y.sub[ind.test], levels = 0:1, labels = c("T1D", "T2D")),
                   pred = 1 / (1 + exp(-pred3)),
                   age = diag_age[sub][ind.test])) +
   theme_bigstatsr() +
   geom_point(aes(pred, age, color = pheno), alpha = 0.7) +
-  theme(legend.position = c(0.1, 0.8)) +
-  labs(color = "Type", x = "Probability of type 2 (PRS + diag_age)", y = "Age at diagnosis")
+  theme(legend.position = c(0.15, 0.8)) +
+  labs(x = "Probability of type 2 (PRS + diag_age + log1p(diag_age))",
+       y = "Age at diagnosis", color = NULL) +
+  guides(colour = guide_legend(override.aes = list(size = 3, alpha = 1)))
 
+ggplot(data.frame(pheno = factor(y.sub[ind.test], levels = 0:1, labels = c("T1D", "T2D")),
+                  pred = 1 / (1 + exp(-pred3)),
+                  BMI = df0$BMI[sub][ind.test])) +
+  theme_bigstatsr() +
+  geom_point(aes(pred, BMI, color = pheno), alpha = 0.7) +
+  theme(legend.position = c(0.1, 0.8)) +
+  labs(color = "Type", x = "Probability of type 2 (PRS + diag_age)", y = "BMI")
+
+ggplot(data.frame(pheno = factor(y.sub[ind.test], levels = 0:1, labels = c("T1D", "T2D")),
+                  pred = 1 / (1 + exp(-pred3)),
+                  age = diag_age[sub][ind.test],
+                  BMI = df0$BMI[sub][ind.test],
+                  sex = factor(df0$sex[sub][ind.test], levels = 0:1,
+                               labels = c("Female", "Male")))) +
+  theme_bigstatsr() +
+  geom_point(aes(age, BMI, color = pheno), alpha = 0.7) +
+  theme(legend.position = "top") +
+  labs(color = NULL, x = "Age at diagnosis", y = "BMI") +
+  guides(colour = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+  facet_wrap(~ sex)
 
 # df <- data.frame(age = diag_age[sub][ind.test], y = y.sub[ind.test], PRS = pred,
 #                  PRS_prob = 1 / (1 + exp(-pred)))
 # summary(glm(y ~ poly(age, 2) + log(age) + PRS + PRS_prob, data = df, family = "binomial"))
 # summary(glm(y ~ (log(age) + age) * PRS, data = df, family = "binomial"))
 
+ggplot(data.frame(pheno = factor(y.sub[ind.test], levels = 0:1, labels = c("T1D", "T2D")),
+                  pred = 1 / (1 + exp(-pred3)),
+                  age = diag_age[sub][ind.test],
+                  BMI = df0$BMI[sub][ind.test])) +
+  theme_bigstatsr() +
+  geom_density(aes(age, fill = pheno), alpha = 0.6) +
+  theme(legend.position = c(0.1, 0.8)) +
+  labs(color = "Type", x = "Age at diagnosis")
+
+AUC(diag_age[sub][ind.test], y.sub[ind.test])  # 0.88
+
+sub2 <- which(diag_age[sub] < 30)
+ind.train2 <- intersect(ind.train, sub2)
+table(y.sub[ind.train2])
+# 0 -> 252 ;  1 -> 189
+system.time(
+  final_mod3 <- snp_grid_stacking(
+    multi_PRS, y.sub[ind.train2], ind.train = match(ind.train2, ind.train),
+    ncores = NCORES, K = 3
+  )
+) # 4 min
+mod3 <- final_mod3$mod
+plot(mod3)
+summary(mod3)
+
+new_beta3 <- final_mod3$beta.G
+
+length(ind3 <- which(new_beta3 != 0))  # 998,445
+
+pred3 <- final_mod3$intercept +
+  big_prodVec(G, new_beta3[ind3], ind.row = ind.test, ind.col = ind3)
+
+AUCBoot(pred3, y.sub[ind.test])  # 78.2 [74.4-82.0]
+
+bool <- diag_age[sub][ind.test] < 30
+AUCBoot(pred3[bool], y.sub[ind.test][bool])  # 87.2 [80.3-93.1]
+
+library(ggplot2)
+ggplot(data.frame(pheno = factor(y.sub[ind.test], levels = 0:1, labels = c("T1D", "T2D")),
+                  pred = 1 / (1 + exp(-pred3)),
+                  age = diag_age[sub][ind.test])[bool, ]) +
+  theme_bigstatsr() +
+  geom_point(aes(pred, age, color = pheno), alpha = 0.9) +
+  labs(color = "Type", x = "Probability of type 2", y = "Age at diagnosis")
+
+#### XGBoost ####
+
+library(xgboost)
+pred_all <- final_mod$intercept + big_prodVec(G, new_beta[ind], ind.col = ind)
+mat <- cbind(PRS = pred_all, PRS_prob = 1 / (1 + exp(-pred_all)),
+             BMI = df0$BMI[sub], age = diag_age[sub])
+plot(as.data.frame(mat))
+dtrain <- xgb.DMatrix(mat[ind.train, ], label = y.sub[ind.train])
+dtest <- xgb.DMatrix(mat[ind.test, ], label = y.sub[ind.test])
+watchlist <- list(train = dtrain, eval = dtest)
+param <- list(max_depth = 2, eta = 0.3, silent = 1, nthread = 2,
+              objective = "binary:logistic", eval_metric = "auc")
+bst <- xgb.train(param, dtrain, nrounds = 60, watchlist)
+xgboost::xgb.importance(model = bst)
+# xgboost::xgb.ggplot.importance(.Last.value)
+
+pred.train <- predict(bst, dtrain)
+qplot(pred.train, fill = as.factor(y.sub[ind.train]), geom = "density", alpha = I(0.5))
+
+
+#### PLR ####
+age.train <- diag_age[sub][ind.train]
+system.time(
+  mod_PLR <- big_spLogReg(G, y.sub[ind.train], ind.train = ind.train, pf.X = 1 / beta^2,
+                          alphas = 10^(-(0:4)), K = 5, ncores = nb_cores(),
+                          covar.train = cbind(age.train, log1p(age.train)), pf.covar = c(0, 0),
+                          nlam.min = 25)
+)
+plot(mod_PLR)
+summary(mod_PLR)
+pred_PLR <- predict(mod_PLR, G, ind.test, covar.row = matrix(0, length(ind.test), 2))
+AUCBoot(pred_PLR, y.sub[ind.test])
+# 77.9 [73.9-81.7] / 78.4 [74.4-82.1] / 78.7 [74.9-82.4]
+
+
+age.test <- diag_age[sub][ind.test]
+pred_PLR2 <- predict(mod_PLR, G, ind.test, covar.row = cbind(age.test, log1p(age.test)))
+AUCBoot(pred_PLR2, y.sub[ind.test]) # 91.1 [88.0-93.9]
+library(ggplot2)
+ggplot(data.frame(pheno = factor(y.sub[ind.test], levels = 0:1, labels = c("T1D", "T2D")),
+                  pred = 1 / (1 + exp(-pred_PLR)),
+                  age = diag_age[sub][ind.test])) +
+  theme_bigstatsr() +
+  geom_point(aes(pred, age, color = pheno), alpha = 0.7) +
+  theme(legend.position = c(0.2, 0.8)) +
+  labs(color = "Type", x = "Probability of type 2", y = "Age at diagnosis")
+
+table(pred = pred_PLR > 0.7, pheno = y.sub[ind.test])
+beta_PLR <- summary(mod_PLR, best.only = TRUE)$beta[[1]]
+sum(beta_PLR != 0) # 5736

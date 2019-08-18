@@ -105,7 +105,7 @@ Nss <- 60801 + 123504
 
 options(bigstatsr.block.sizeGB = 50)
 
-for (ic in 1:5) {
+for (ic in 1:6) {
 
   res_file <- paste0("res_small/CAD_", ic, ".rds")
   if (file.exists(res_file)) next
@@ -239,23 +239,27 @@ for (ic in 1:5) {
       " --ldr {round(nrow(ukbb$map) / 3000)}",
       " --ldf {tmp}",
       " --N {Nss}",
-      " --h2 0.4",
+      " --h2 0.49",
       " --out {tmp}"
     ))
   ) # 343 min
 
-  beta_ldpred <-
-    list.files("res_small", pattern = paste0("^", basename(tmp), "_LDpred.*\\.txt$"),
-               full.names = TRUE) %>%
-    sapply(function(file) {
-      res_ldpred <- bigreadr::fread2(file, select = c(3, 7))
-      beta_ldpred <- numeric(nrow(ukbb$map))
-      beta_ldpred[match(res_ldpred$sid, ukbb$map$marker.ID)] <- res_ldpred[[2]]
-      beta_ldpred
-    })
+  print(getwd())
+  files_ldpred <- list.files(
+    path       = dirname(tmp),
+    pattern    = paste0("^", basename(tmp), "_LDpred.*\\.txt$"),
+    full.names = TRUE
+  )
+  stopifnot(length(files_ldpred) == 8)
+  beta_ldpred <- sapply(files_ldpred, function(file) {
+    res_ldpred <- bigreadr::fread2(file, select = c(3, 7))
+    beta_ldpred <- numeric(nrow(ukbb$map))
+    beta_ldpred[match(res_ldpred$sid, ukbb$map$marker.ID)] <- res_ldpred[[2]]
+    beta_ldpred
+  })
 
   system.time(
-    pred_train_ldpred <- big_prodMat(G, ind.row = ind.train, beta_ldpred,
+    pred_train_ldpred <- big_prodMat(G, beta_ldpred, ind.row = ind.train,
                                      ncores = nb_cores())
   ) # 23 min
   auc_train_ldpred <- apply(-pred_train_ldpred, 2, AUC, target = y.sub[ind.train])
@@ -282,4 +286,3 @@ for (ic in 1:5) {
   unlink(paste0(tmp, "*"))
 
 }
-
