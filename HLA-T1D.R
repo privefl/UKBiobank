@@ -62,3 +62,11 @@ summary(mod)
 
 pred <- predict(mod, alleles, ind.test)
 AUCBoot(pred, y.sub[ind.test])  # 74.6 [71.2-78.0]
+
+library(ggplot2)
+ggplot(data.frame(pred = pred, pheno = y.sub[ind.test])) +
+  theme_bigstatsr() +
+  geom_density(aes(pred, fill = as.factor(pheno)), alpha = 0.3) +
+  scale_x_continuous(limits = c(0, 0.03)) +
+  theme(legend.position = c(0.7, 0.8)) +
+  labs(x = "Prediction", fill = "Phenotype")
