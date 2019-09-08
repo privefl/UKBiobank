@@ -209,6 +209,7 @@ for (ic in 1:6) {
   nb_lassosum <- length(ind <- which(v$best.beta != 0))  # 290,204
   pred_lassosum <- big_prodVec(G, v$best.beta[ind], ind.row = ind.test, ind.col = ind)
 
+
   #### LDpred ####
   file_sumstats <- paste0(tmp, ".txt")
   mutate(ukbb$map, beta = beta, pval = 10^-lpval) %>%
@@ -224,7 +225,7 @@ for (ic in 1:6) {
     "python3 {ldpred} coord",
     " --gf {tmp}",
     " --ssf {file_sumstats}",
-    " --maf 0 --skip-coordination",
+    " --skip-coordination",
     " --rs marker.ID --A1 allele1 --A2 allele2 --pos physical.pos --chr chromosome",
     " --pval pval --eff beta --beta",
     " --N {Nss}",
@@ -242,15 +243,11 @@ for (ic in 1:6) {
       " --h2 0.49",
       " --out {tmp}"
     ))
-  ) # 343 min
+  ) # 438 min
 
-  print(getwd())
-  files_ldpred <- list.files(
-    path       = dirname(tmp),
-    pattern    = paste0("^", basename(tmp), "_LDpred.*\\.txt$"),
-    full.names = TRUE
-  )
-  stopifnot(length(files_ldpred) == 8)
+  ext <- c(sprintf("_LDpred_p%.4e.txt", c(1, 0.3, 0.1, 0.03, 0.01, 0.003, 0.001)),
+           "_LDpred-inf.txt")
+  files_ldpred <- paste0(tmp, ext)
   beta_ldpred <- sapply(files_ldpred, function(file) {
     res_ldpred <- bigreadr::fread2(file, select = c(3, 7))
     beta_ldpred <- numeric(nrow(ukbb$map))
@@ -260,7 +257,7 @@ for (ic in 1:6) {
 
   system.time(
     pred_train_ldpred <- big_prodMat(G, beta_ldpred, ind.row = ind.train,
-                                     ncores = nb_cores())
+                                     ncores = NCORES)
   ) # 23 min
   auc_train_ldpred <- apply(-pred_train_ldpred, 2, AUC, target = y.sub[ind.train])
 
