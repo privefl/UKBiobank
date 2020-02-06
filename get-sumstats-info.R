@@ -85,8 +85,9 @@ merged <- dplyr::full_join(merged, not_duplicated(sumstats_adhd))
 #               destfile = "sumstats_UKBB.txt.gz")
 # R.utils::gunzip("sumstats_UKBB.txt.gz")
 sumstats_ukbb <- fread2("sumstats_UKBB.txt",
-                        select = c("CHR", "BP", "INFO", "SNP"),
-                        col.names = c("chr", "pos", "info_ukbb", "snp_id"))
+                        select = c("CHR", "BP", "INFO", "SNP", "A1FREQ"),
+                        col.names = c("chr", "pos", "info_ukbb", "snp_id", "maf"))
+sumstats_ukbb$maf <- with(sumstats_ukbb, pmin(maf, 1 - maf))
 
 merged <- dplyr::full_join(merged, not_duplicated(sumstats_ukbb))
 mean(substr(merged$snp_id, 1, 2) == "rs", na.rm = TRUE)  # 1
@@ -132,6 +133,7 @@ str(merged_nona)  # 4.3M
 hist(merged_nona$info_illu_t1d)
 merged_nona$info_min_all <- apply(merged_nona[3:10], 1, min)
 merged_nona$info_mean_all <- rowMeans(merged_nona[3:10])
+merged_nona$grp_maf <- cut(merged_nona$maf, c(0, 0.02, 0.1, 0.25, 0.5))
 hist(merged_nona$info_min_all)
 
 sapply(setNames(nm = seq(0.5, 1, by = 0.01)), function(thr) {
@@ -151,18 +153,25 @@ sapply(setNames(nm = seq(0.5, 1, by = 0.01)), function(thr) {
 
 map_hapmap3 <- bigreadr::fread2("ftp://ftp.ncbi.nlm.nih.gov/hapmap/genotypes/hapmap3/plink_format/draft_2/hapmap3_r2_b36_fwd.consensus.qc.poly.map.bz2")
 merged_nona_hapmap3 <-
-  dplyr::left_join(map_hapmap3[2], merged_nona, by = c(V2 = "snp_id"))
-na.omit(merged_nona_hapmap3)
-merged_hapmap3 <- dplyr::left_join(map_hapmap3[2], merged, by = c(V2 = "snp_id"))
-str(na.omit(merged_hapmap3))  # 739,701
-str(merged_hapmap3)
+  dplyr::inner_join(map_hapmap3[2], merged_nona, by = c(V2 = "snp_id"))
+str(merged_nona_hapmap3)
 
-hist(merged_nona_hapmap3$info_min_all, freq = FALSE,
-     breaks = seq(0.2, 1, by = 0.02),
-     col = scales::alpha("blue", 0.4))
-hist(pmax(0, merged_nona$info_min_all), freq = FALSE, add = TRUE,
-     breaks = seq(0, 1, by = 0.02),
-     col = scales::alpha("red", 0.4))
+library(ggplot2)
+ggplot() +
+  bigstatsr::theme_bigstatsr() +
+  geom_histogram(aes(info_mean_all, y = ..density..), data = merged_nona,
+                 breaks = seq(0, 1, by = 0.01),
+                 color = "blue", fill = "blue", size = 1.2, alpha = 0.2) +
+  geom_histogram(aes(info_mean_all, y = ..density..), data = merged_nona_hapmap3,
+                 breaks = seq(0, 1, by = 0.01),
+                 color = "red", fill = "red", size = 1.2, alpha = 0.2) +
+  geom_histogram(aes(info_mean_all, y = ..density..),
+                 data = subset(merged_nona, info_min_all > 0.8),
+                 breaks = seq(0, 1, by = 0.01),
+                 color = "green", fill = "green", size = 1.2, alpha = 0.2) +
+  facet_wrap(~ grp_maf) +
+  xlim(0.75, 1)
+
 
 logit <- function(x) {
   x <- pmin(pmax(1e-5, x), 1 - 1e-5)
@@ -173,3 +182,22 @@ hist(logit(merged$info_ukbb))
 hist(logit(merged$info_illu_t1d))
 
 cor(do.call("cbind", lapply(merged[3:10], logit)), use = "pairwise.complete.obs")
+
+merged_nona
+na.omit(merged_nona_hapmap3)
+
+
+s <- lapply(merged[c(4:10, 12)], function(x) which(!is.na(x)))
+s <- lapply(merged[c(4:10, 12)], function(x) which(x > 0.8))
+str(s)
+
+system.time(tmp <- eulerr:::parse_list(s[1:6]))  # 514 sec // 277 sec
+str(tmp)
+
+eulerr::venn(setNames(list(1, 3:4, 2, 5:6, 3, 4), LETTERS[1:6]))
+
+# Venn is limited to 5 apparently
+system.time(v <- eulerr::venn(tmp, input = "union")
+plot(v)
+system.time(e <- eulerr::euler(tmp, input = "union", shape = "ellipse"))  # 12 sec
+plot(e)
